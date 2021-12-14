@@ -2,7 +2,6 @@
 
 
 pub mod vectree;
-pub mod boxtree;
 mod node;
 
 // read: https://doc.rust-lang.org/reference/visibility-and-privacy.html

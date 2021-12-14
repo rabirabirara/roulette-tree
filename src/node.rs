@@ -8,13 +8,13 @@ pub enum Color {
 
 #[derive(Debug, Clone)]
 pub struct Node<K, V> {
-    index: usize,
-    parent: Option<usize>,
-    left: Option<usize>,
-    right: Option<usize>,
-    key: K,
-    value: V,
-    color: Color,
+    pub index: usize,
+    pub parent: Option<usize>,
+    pub left: Option<usize>,
+    pub right: Option<usize>,
+    pub key: K,
+    pub value: V,
+    pub color: Color,
 }
 
 impl<K, V> Node<K, V> {
