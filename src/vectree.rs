@@ -1,66 +1,21 @@
 use std::cmp::{Ord, Ordering};
-
 use std::fmt::{Display, Formatter};
 
-#[derive(Eq, PartialEq, Debug, Clone, Copy)]
-enum Color {
-    Red,
-    Black,
-}
+use crate::node::{Color, Node};
 
-#[derive(Debug, Clone)]
-struct Node<K, V> {
-    index: usize,
-    parent: Option<usize>,
-    left: Option<usize>,
-    right: Option<usize>,
-    key: K,
-    value: V,
-    color: Color,
-}
+// * The implementation of this RB tree does not actually delete nodes.  It instead leaks them.
+// * This tree is best used when you need to insert and update objects, but not remove them - for example, storing a map.
 
-impl<K, V> Node<K, V> {
-    pub fn from(
-        index: usize,
-        parent: Option<usize>,
-        left: Option<usize>,
-        right: Option<usize>,
-        key: K,
-        value: V,
-        color: Color,
-    ) -> Self {
-        Node {
-            index,
-            parent,
-            left,
-            right,
-            key,
-            value,
-            color,
-        }
-    }
-}
+// Why use a Vec over pointers and heap allocation?  Well, pointers (dynamic object creation) are less performant and heap allocation struggles to exploit the cache.  We might lose the ability to deallocate individual elements, but we gain the ability of a fast linear search (which excels for small trees), instant indexing of the tree, a quick determination of length, etc.
+// Read https://doc.rust-lang.org/std/collections/struct.BTreeMap.html for more information.
 
-impl<K, V> Display for Node<K, V>
-where
-    K: Display,
-    V: Display,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "[{:?} -> {} -> ({:?}, {:?})]::{:?} ({} -> {})",
-            self.parent, self.index, self.left, self.right, self.color, self.key, self.value
-        )
-    }
-}
 use std::fmt::Debug;
-pub struct Tree<K, V> {
+pub struct VecTree<K, V> {
     nodes: Vec<Node<K, V>>,
-    root: usize,
+    root: Option<usize>,
 }
 
-impl<K, V> Tree<K, V>
+impl<K, V> VecTree<K, V>
 where
     K: Ord + Display + Debug,
     V: Display + Debug,
@@ -68,7 +23,7 @@ where
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
-            root: 0,
+            root: None,
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -116,10 +71,10 @@ where
         // If there is a parent of this subtree, update its children.
         if let Some(par) = parent {
             if let Some(par_node) = self.try_at_mut(par) {
-                if par_node.left.is_some() && par_node.left? == x_idx {
-                    par_node.left = Some(y_idx);
-                } else if par_node.right.is_some() && par_node.right? == x_idx {
-                    par_node.right = Some(y_idx);
+                if par_node.left.contains(&x_idx) {
+                    par_node.left.replace(y_idx);
+                } else if par_node.right.contains(&x_idx) {
+                    par_node.right.replace(y_idx);
                 } else {
                     panic!("X's parent does not record X as one of its children in left_rotate().");
                 }
@@ -129,20 +84,20 @@ where
             }
         } else {
             // this subtree is actually the root tree. update the root to y.
-            self.root = y_idx;
+            self.root.replace(y_idx);
         }
 
         let x = self.try_at_mut(x_idx)?;
         x.left = a;
         x.right = b;
-        x.parent = Some(y_idx);
+        x.parent.replace(y_idx);
         let y = self.try_at_mut(y_idx)?;
-        y.left = Some(x_idx);
+        y.left.replace(x_idx);
         y.parent = parent;
 
         // If b is a subtree, switch its parent between x and y.
         if let Some(b_node) = self.at_mut_opt(b) {
-            b_node.parent = Some(x_idx);
+            b_node.parent.replace(x_idx);
         }
 
         Some(())
@@ -161,10 +116,10 @@ where
         // If there is a parent of this subtree, update its children.
         if let Some(par) = parent {
             if let Some(par_node) = self.try_at_mut(par) {
-                if par_node.left.is_some() && par_node.left? == y_idx {
-                    par_node.left = Some(x_idx);
-                } else if par_node.right.is_some() && par_node.right? == y_idx {
-                    par_node.right = Some(x_idx);
+                if par_node.left.contains(&y_idx) {
+                    par_node.left.replace(x_idx);
+                } else if par_node.right.contains(&y_idx) {
+                    par_node.right.replace(x_idx);
                 } else {
                     panic!(
                         "Y's parent does not record X as one of its children in right_rotate()."
@@ -176,26 +131,28 @@ where
             }
         } else {
             // this subtree is actually the root tree.  update the root of the tree to x.
-            self.root = x_idx;
+            self.root.replace(x_idx);
         }
 
         let y = self.try_at_mut(y_idx)?;
         y.left = b;
         y.right = c;
-        y.parent = Some(x_idx);
+        y.parent.replace(x_idx);
         let x = self.try_at_mut(x_idx)?;
-        x.right = Some(y_idx);
+        x.right.replace(y_idx);
         x.parent = parent;
 
         // If b is a subtree, switch its parent between x and y.
         if let Some(b_node) = self.at_mut_opt(b) {
-            b_node.parent = Some(y_idx);
+            b_node.parent.replace(y_idx);
         }
 
         Some(())
     }
     fn enforce_root_black(&mut self) {
-        self.nodes[self.root].color = Color::Black;
+        if let Some(root) = self.root {
+            self.nodes[root].color = Color::Black;
+        }
     }
     // Two ways of searching a Vec-BTree: linear, and BST search.
     // Linear is faster in practice thanks to cache locality.
@@ -211,7 +168,7 @@ where
     }
     // get_mut...
     pub fn lookup(&self, key: &K) -> Option<&V> {
-        let mut cur = Some(self.root);
+        let mut cur = self.root;
         while let Some(index) = cur {
             if let Some(node) = self.nodes.get(index) {
                 match node.key.cmp(key) {
@@ -230,7 +187,7 @@ where
     // Note: maps use "mem::replace" to replace elements.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         let mut prev = None;
-        let mut cur = Some(self.root);
+        let mut cur = self.root;
 
         while let Some(index) = cur {
             if let Some(node) = self.nodes.get_mut(index) {
@@ -245,8 +202,10 @@ where
                 if !self.is_empty() {
                     panic!("could not find node of root index, despite self being occupied.");
                 }
+                // * If the tree is empty, the next node to be added should be at the start of the array.
+                self.root.replace(0);
                 self.nodes
-                    .push(Node::from(self.root, None, None, None, k, v, Color::Black));
+                    .push(Node::from(0, None, None, None, k, v, Color::Black));
                 return None;
             }
         }
@@ -257,8 +216,8 @@ where
         );
 
         match k.cmp(&leaf.key) {
-            Ordering::Less => leaf.left = Some(index),
-            Ordering::Greater => leaf.right = Some(index),
+            Ordering::Less => { leaf.left.replace(index); },
+            Ordering::Greater => { leaf.right.replace(index); },
             Ordering::Equal => unreachable!(),
         }
         let z = Node::from(index, prev, None, None, k, v, Color::Red);
@@ -283,7 +242,7 @@ where
             // y is the uncle of z.
             // println!("parent: {}\ngrandparent: {}", parent, grandparent);
 
-            if grand_left.is_some() && par_idx == grand_left? {
+            if grand_left.contains(&par_idx) {
                 let y = self.at_opt(grand_right);
                 // case 1: z red, z.p red, z's uncle red.
                 if y.is_some() && y?.color == Color::Red {
@@ -294,7 +253,7 @@ where
                     z_idx = grand_idx;
                 } else {
                     // case 2: z is a right child, and z's uncle is black
-                    if parent.right.is_some() && z_idx == parent.right? {
+                    if parent.right.contains(&z_idx) {
                         z_idx = par_idx;
                         self.left_rotate(z_idx);
                     }
@@ -305,7 +264,7 @@ where
                     self.at_mut(grand_idx).color = Color::Red;
                     self.right_rotate(grand_idx);
                 }
-            } else if grand_right.is_some() && par_idx == grand_right? {
+            } else if grand_right.contains(&par_idx) {
                 let y = self.at_opt(grand_left);
                 // case 1: z red, z.p red, z's uncle red.
                 if y.is_some() && y?.color == Color::Red {
@@ -316,7 +275,7 @@ where
                     z_idx = grand_idx;
                 } else {
                     // case 2: z is a right child, and z's uncle is black
-                    if parent.left.is_some() && z_idx == parent.left? {
+                    if parent.left.contains(&z_idx) {
                         z_idx = par_idx;
                         self.right_rotate(z_idx);
                     }
@@ -335,30 +294,60 @@ where
         self.enforce_root_black();
         Some(())
     }
+    // Replace node u with node v.  v can be nil, u cannot.
+    // Note: we don't do any checking for whether or not these indices point to nodes.
+    fn transplant(&mut self, u_opt: Option<usize>, v_opt: Option<usize>) {
+        let u = self.at_opt(u_opt).expect("u cannot be nil in transplant()!");
+        let u_idx = u_opt.expect("u cannot be nil in transplant().");
+        let u_parent = u.parent;
+
+        if let Some(v) = self.at_mut_opt(v_opt) {
+            v.parent = u_parent;
+        }
+
+        match u_parent {
+            // static analysis notes that reference to u dies here, and so a mmutable reference can be had.
+            Some(p) => {
+                if let Some(parent) = self.try_at_mut(p) {
+                    if parent.left.contains(&u_idx) {
+                        parent.left = v_opt;
+                    } else if parent.right.contains(&u_idx) {
+                        parent.right = v_opt;
+                    } else {
+                        panic!("Parent of u did not record having u as child.");
+                    }
+                } else {
+                    panic!("Parent of u not found in the tree.");
+                }
+            }
+            None => self.root = v_opt,
+        }
+    }
     pub fn show(&self)
     where
         K: Display,
         V: Display,
     {
-        self.display(Some(self.root));
+        self.display(self.root, "");
     }
-    pub fn display(&self, root_opt: Option<usize>)
+    pub fn display(&self, root_opt: Option<usize>, tab: &str)
     where
         K: Display,
         V: Display,
     {
         match self.at_opt(root_opt) {
             Some(node) => {
-                self.display(node.left);
-                println!("{}", node);
-                self.display(node.right);
+                let tabbed = format!("{}    ", tab);
+                self.display(node.left, &tabbed);
+                println!("{}{}", tab, node);
+                self.display(node.right, &tabbed);
             }
             None => return,
         }
     }
 }
 
-impl<K, V> Display for Tree<K, V>
+impl<K, V> Display for VecTree<K, V>
 where
     K: Display,
     V: Display,
