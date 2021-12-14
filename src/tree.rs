@@ -1,13 +1,14 @@
 use std::cmp::{Ord, Ordering};
 
-const ROOT: usize = 0;
+use std::fmt::{Display, Formatter};
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
 enum Color {
     Red,
     Black,
 }
 
+#[derive(Debug, Clone)]
 struct Node<K, V> {
     index: usize,
     parent: Option<usize>,
@@ -38,24 +39,43 @@ impl<K, V> Node<K, V> {
             color,
         }
     }
-    pub fn index(&self) -> usize {
-        self.index
-    }
 }
 
+impl<K, V> Display for Node<K, V>
+where
+    K: Display,
+    V: Display,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{:?} -> {} -> ({:?}, {:?})]::{:?} ({} -> {})",
+            self.parent, self.index, self.left, self.right, self.color, self.key, self.value
+        )
+    }
+}
+use std::fmt::Debug;
 pub struct Tree<K, V> {
     nodes: Vec<Node<K, V>>,
+    root: usize,
 }
 
 impl<K, V> Tree<K, V>
 where
-    K: Ord,
+    K: Ord + Display + Debug,
+    V: Display + Debug,
 {
     pub fn new() -> Self {
-        Self { nodes: Vec::new() }
+        Self {
+            nodes: Vec::new(),
+            root: 0,
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.nodes.len()
     }
     // Should be a fast way to access a node at some index.
     fn at(&self, node: usize) -> &Node<K, V> {
@@ -86,7 +106,7 @@ where
         // start -> ... x -> (a, y -> (b, c))
         // want: start -> ... y -> (x -> (a, b), c)
         let x = self.try_at(idx)?;
-        let x_idx = x.index;
+        let x_idx = idx;
         let a = x.left;
         let parent = x.parent;
         let y = self.try_at(x.right?)?;
@@ -96,26 +116,20 @@ where
         // If there is a parent of this subtree, update its children.
         if let Some(par) = parent {
             if let Some(par_node) = self.try_at_mut(par) {
-                if let Some(left) = par_node.left {
-                    if left == x_idx {
-                        par_node.left = Some(y_idx);
-                    }
-                } else if let Some(right) = par_node.right {
-                    if right == x_idx {
-                        par_node.right = Some(y_idx);
-                    }
-                    // then neither of the children are equivalent to x. error
-                    panic!("X's parent does not record X as one of its children in left_rotate().");
+                if par_node.left.is_some() && par_node.left? == x_idx {
+                    par_node.left = Some(y_idx);
+                } else if par_node.right.is_some() && par_node.right? == x_idx {
+                    par_node.right = Some(y_idx);
                 } else {
-                    // neither of the children exist.  error
-                    panic!("X's parent does not record having any children (both None) in left_rotate().");
+                    panic!("X's parent does not record X as one of its children in left_rotate().");
                 }
             } else {
                 // x points to a parent, but it apparently doesn't exist in the tree. error.
                 panic!("X points to a parent that is supposedly not in the tree.");
             }
         } else {
-            // x is root, parent = None. proceed as normal.
+            // this subtree is actually the root tree. update the root to y.
+            self.root = y_idx;
         }
 
         let x = self.try_at_mut(x_idx)?;
@@ -126,13 +140,18 @@ where
         y.left = Some(x_idx);
         y.parent = parent;
 
+        // If b is a subtree, switch its parent between x and y.
+        if let Some(b_node) = self.at_mut_opt(b) {
+            b_node.parent = Some(x_idx);
+        }
+
         Some(())
     }
     fn right_rotate(&mut self, idx: usize) -> Option<()> {
         // start -> ... y -> (x -> (a, b), c)
         // want: start -> ... x -> (a, y -> (b, c))
         let y = self.try_at(idx)?;
-        let y_idx = y.index;
+        let y_idx = idx;
         let c = y.right;
         let parent = y.parent;
         let x = self.try_at(y.left?)?;
@@ -142,26 +161,22 @@ where
         // If there is a parent of this subtree, update its children.
         if let Some(par) = parent {
             if let Some(par_node) = self.try_at_mut(par) {
-                if let Some(left) = par_node.left {
-                    if left == y_idx {
-                        par_node.left = Some(x_idx);
-                    }
-                } else if let Some(right) = par_node.right {
-                    if right == y_idx {
-                        par_node.right = Some(x_idx);
-                    }
-                    // then neither of the children are equivalent to y. error
-                    panic!("Y's parent does not record Y as one of its children in left_rotate().");
+                if par_node.left.is_some() && par_node.left? == y_idx {
+                    par_node.left = Some(x_idx);
+                } else if par_node.right.is_some() && par_node.right? == y_idx {
+                    par_node.right = Some(x_idx);
                 } else {
-                    // neither of the children exist.  error
-                    panic!("Y's parent does not record having any children (both None) in left_rotate().");
+                    panic!(
+                        "Y's parent does not record X as one of its children in right_rotate()."
+                    );
                 }
             } else {
                 // y points to a parent, but it apparently doesn't exist in the tree. error.
                 panic!("Y points to a parent that is supposedly not in the tree.");
             }
         } else {
-            // y is root, parent = None. proceed as normal.
+            // this subtree is actually the root tree.  update the root of the tree to x.
+            self.root = x_idx;
         }
 
         let y = self.try_at_mut(y_idx)?;
@@ -172,10 +187,15 @@ where
         x.right = Some(y_idx);
         x.parent = parent;
 
+        // If b is a subtree, switch its parent between x and y.
+        if let Some(b_node) = self.at_mut_opt(b) {
+            b_node.parent = Some(y_idx);
+        }
+
         Some(())
     }
     fn enforce_root_black(&mut self) {
-        self.nodes[ROOT].color = Color::Black;
+        self.nodes[self.root].color = Color::Black;
     }
     // Two ways of searching a Vec-BTree: linear, and BST search.
     // Linear is faster in practice thanks to cache locality.
@@ -191,7 +211,7 @@ where
     }
     // get_mut...
     pub fn lookup(&self, key: &K) -> Option<&V> {
-        let mut cur = Some(ROOT);
+        let mut cur = Some(self.root);
         while let Some(index) = cur {
             if let Some(node) = self.nodes.get(index) {
                 match node.key.cmp(key) {
@@ -210,7 +230,7 @@ where
     // Note: maps use "mem::replace" to replace elements.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         let mut prev = None;
-        let mut cur = Some(ROOT);
+        let mut cur = Some(self.root);
 
         while let Some(index) = cur {
             if let Some(node) = self.nodes.get_mut(index) {
@@ -222,13 +242,16 @@ where
                 }
             } else {
                 // Root is not present; add in new root.
+                if !self.is_empty() {
+                    panic!("could not find node of root index, despite self being occupied.");
+                }
                 self.nodes
-                    .push(Node::from(ROOT, None, None, None, k, v, Color::Black));
+                    .push(Node::from(self.root, None, None, None, k, v, Color::Black));
                 return None;
             }
         }
         // reached nil, tree not empty, prev = Some(node) under which to place the new node.
-        let index = self.nodes.len() - 1;
+        let index = self.nodes.len();
         let leaf = self.at_mut(
             prev.expect("ERR: prev should contain a Some(index) that points to an existing node."),
         );
@@ -239,9 +262,6 @@ where
             Ordering::Equal => unreachable!(),
         }
         let z = Node::from(index, prev, None, None, k, v, Color::Red);
-        // if self.insert_fix(&mut z).is_none() {
-        //     panic!("insert_fix failed");
-        // }
         self.nodes.push(z);
         self.insert_fix(index);
 
@@ -251,26 +271,23 @@ where
         let mut z_idx = inserted;
 
         while let Some(par_idx) = self.at(z_idx).parent {
-            // let par_idx = z.parent?;            // if no parent, return
             let parent = self.at(par_idx);
             if parent.color == Color::Black {
                 return Some(());
             }
-            let grand_idx = parent.parent?;     // if no grandparent, return; parent should be black as it is root
+            let grand_idx = parent.parent?; // if no grandparent, return; parent should be black as it is root
             let grandparent = self.at(grand_idx);
             let grand_left = grandparent.left;
             let grand_right = grandparent.right;
 
             // y is the uncle of z.
-            let y;
-            let y_idx;
+            // println!("parent: {}\ngrandparent: {}", parent, grandparent);
 
             if grand_left.is_some() && par_idx == grand_left? {
-                y = self.at_opt(grand_right);
-                y_idx = y?.index;
-
+                let y = self.at_opt(grand_right);
                 // case 1: z red, z.p red, z's uncle red.
                 if y.is_some() && y?.color == Color::Red {
+                    let y_idx = y?.index;
                     self.at_mut(par_idx).color = Color::Black;
                     self.at_mut(y_idx).color = Color::Black;
                     self.at_mut(grand_idx).color = Color::Red;
@@ -282,18 +299,17 @@ where
                         self.left_rotate(z_idx);
                     }
                     // case 3: z is a left child, and z's uncle is black
-                    let par_idx = self.at(z_idx).parent?;       // can't be nil as it was grandparent
-                    let grand_idx = self.at(par_idx).parent?;   // can't be nil; must be colored red
+                    let par_idx = self.at(z_idx).parent?; // can't be nil as it was grandparent
+                    let grand_idx = self.at(par_idx).parent?; // can't be nil; must be colored red
                     self.at_mut(par_idx).color = Color::Black;
                     self.at_mut(grand_idx).color = Color::Red;
                     self.right_rotate(grand_idx);
                 }
             } else if grand_right.is_some() && par_idx == grand_right? {
-                y = self.at_opt(grand_left);
-                y_idx = y?.index;
-
+                let y = self.at_opt(grand_left);
                 // case 1: z red, z.p red, z's uncle red.
                 if y.is_some() && y?.color == Color::Red {
+                    let y_idx = y?.index;
                     self.at_mut(par_idx).color = Color::Black;
                     self.at_mut(y_idx).color = Color::Black;
                     self.at_mut(grand_idx).color = Color::Red;
@@ -305,8 +321,8 @@ where
                         self.right_rotate(z_idx);
                     }
                     // case 3: z is a left child, and z's uncle is black
-                    let par_idx = self.at(z_idx).parent?;       // can't be nil as it was grandparent
-                    let grand_idx = self.at(par_idx).parent?;   // can't be nil; must be colored red
+                    let par_idx = self.at(z_idx).parent?; // can't be nil as it was grandparent
+                    let grand_idx = self.at(par_idx).parent?; // can't be nil; must be colored red
                     self.at_mut(par_idx).color = Color::Black;
                     self.at_mut(grand_idx).color = Color::Red;
                     self.left_rotate(grand_idx);
@@ -318,5 +334,39 @@ where
 
         self.enforce_root_black();
         Some(())
+    }
+    pub fn show(&self)
+    where
+        K: Display,
+        V: Display,
+    {
+        self.display(Some(self.root));
+    }
+    pub fn display(&self, root_opt: Option<usize>)
+    where
+        K: Display,
+        V: Display,
+    {
+        match self.at_opt(root_opt) {
+            Some(node) => {
+                self.display(node.left);
+                println!("{}", node);
+                self.display(node.right);
+            }
+            None => return,
+        }
+    }
+}
+
+impl<K, V> Display for Tree<K, V>
+where
+    K: Display,
+    V: Display,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for n in &self.nodes {
+            write!(f, "{}", n)?;
+        }
+        Ok(())
     }
 }
