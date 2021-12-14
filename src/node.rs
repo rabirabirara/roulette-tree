@@ -1,3 +1,4 @@
+use std::fmt;
 
 #[derive(Eq, PartialEq, Debug, Clone, Copy)]
 pub enum Color {
@@ -38,12 +39,12 @@ impl<K, V> Node<K, V> {
     }
 }
 
-impl<K, V> Display for Node<K, V>
+impl<K, V> fmt::Display for Node<K, V>
 where
-    K: Display,
-    V: Display,
+    K: fmt::Display,
+    V: fmt::Display,
 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "[{:?} -> {} -> ({:?}, {:?})]::{:?} ({} -> {})",
