@@ -11,7 +11,10 @@ use crate::node::{Color, Node};
 
 use std::fmt::Debug;
 pub struct VecTree<K, V> {
-    nodes: Vec<Node<K, V>>,
+    // ? A node can be allocated or "leaked".
+    nodes: Vec<Option<Node<K, V>>>,
+    // Store the index of leaked nodes.
+    leaked: Vec<usize>,
     root: Option<usize>,
 }
 
@@ -23,6 +26,7 @@ where
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
+            leaked: Vec::new(),
             root: None,
         }
     }
@@ -33,27 +37,27 @@ where
         self.nodes.len()
     }
     // Should be a fast way to access a node at some index.
-    fn at(&self, node: usize) -> &Node<K, V> {
-        &self.nodes[node]
+    fn at(&self, idx: usize) -> &Node<K, V> {
+        self.nodes[idx].as_ref().expect(format!("Expected an allocated Some(node) at index {}", idx).as_str())
     }
-    fn at_mut(&mut self, node: usize) -> &mut Node<K, V> {
-        &mut self.nodes[node]
+    fn at_mut(&mut self, idx: usize) -> &mut Node<K, V> {
+        self.nodes[idx].as_mut().expect(format!("Expected an allocated Some(node) at index {}", idx).as_str())
     }
-    fn try_at(&self, node: usize) -> Option<&Node<K, V>> {
-        self.nodes.get(node)
+    fn try_at(&self, idx: usize) -> Option<&Node<K, V>> {
+        self.nodes[idx].as_ref()
     }
-    fn try_at_mut(&mut self, node: usize) -> Option<&mut Node<K, V>> {
-        self.nodes.get_mut(node)
+    fn try_at_mut(&mut self, idx: usize) -> Option<&mut Node<K, V>> {
+        self.nodes[idx].as_mut()
     }
-    fn at_opt(&self, node_opt: Option<usize>) -> Option<&Node<K, V>> {
-        match node_opt {
-            Some(node) => self.try_at(node),
+    fn at_opt(&self, idx_opt: Option<usize>) -> Option<&Node<K, V>> {
+        match idx_opt {
+            Some(idx) => self.try_at(idx),
             _ => None,
         }
     }
-    fn at_mut_opt(&mut self, node_opt: Option<usize>) -> Option<&mut Node<K, V>> {
-        match node_opt {
-            Some(node) => self.try_at_mut(node),
+    fn at_mut_opt(&mut self, idx_opt: Option<usize>) -> Option<&mut Node<K, V>> {
+        match idx_opt {
+            Some(idx) => self.try_at_mut(idx),
             _ => None,
         }
     }
@@ -151,7 +155,19 @@ where
     }
     fn enforce_root_black(&mut self) {
         if let Some(root) = self.root {
-            self.nodes[root].color = Color::Black;
+            self.at_mut(root).color = Color::Black;
+        }
+    }
+    fn minimum(&self, root_opt: Option<usize>) -> Option<usize> {
+        let cur_opt = self.at_opt(root_opt);
+        if let Some(cur) = cur_opt {
+            if let Some(left) = cur.left {
+                self.minimum(Some(left))
+            } else {
+                Some(cur.index)
+            }
+        } else {
+            None
         }
     }
     // Two ways of searching a Vec-BTree: linear, and BST search.
@@ -160,21 +176,39 @@ where
     // We implement get() and lookup() to represent both.
     pub fn get(&self, key: &K) -> Option<&V> {
         for k in &self.nodes {
-            if k.key.cmp(key) == Ordering::Equal {
-                return Some(&k.value);
-            }
+            if let Some(k) = k {
+                if k.key.cmp(key) == Ordering::Equal {
+                    return Some(&k.value);
+                }
+            } // else, the node is deallocated; skip it
         }
         return None;
     }
     // get_mut...
+    // * Takes ownership of a node, deallocating it
+    fn get_and_take_node(&mut self, key: &K) -> Option<Node<K, V>> {
+        for k_node in &mut self.nodes {
+            if let Some(k) = k_node {
+                if k.key.cmp(key) == Ordering::Equal {
+                    // ! Check if this causes the node to be deallocated.
+                    return std::mem::take(k_node);
+                }
+            }
+        }
+        return None;
+    }
     pub fn lookup(&self, key: &K) -> Option<&V> {
         let mut cur = self.root;
         while let Some(index) = cur {
-            if let Some(node) = self.nodes.get(index) {
-                match node.key.cmp(key) {
-                    Ordering::Less => cur = node.right,   // node < key
-                    Ordering::Greater => cur = node.left, // key < node
-                    Ordering::Equal => return Some(&node.value),
+            if let Some(n) = self.nodes.get(index) {
+                if let Some(node) = n {
+                    match node.key.cmp(key) {
+                        Ordering::Less => cur = node.right,   // node < key
+                        Ordering::Greater => cur = node.left, // key < node
+                        Ordering::Equal => return Some(&node.value),
+                    }
+                } else {
+                    panic!("Some index followed by 'pointer' led to a deallocated node in lookup(). index: {}", index);
                 }
             } else {
                 // Root is not present, thus this is empty.
@@ -190,12 +224,16 @@ where
         let mut cur = self.root;
 
         while let Some(index) = cur {
-            if let Some(node) = self.nodes.get_mut(index) {
-                prev = cur;
-                match node.key.cmp(&k) {
-                    Ordering::Less => cur = node.right,   // node < key
-                    Ordering::Greater => cur = node.left, // key < node
-                    Ordering::Equal => return Some(std::mem::replace(&mut node.value, v)),
+            if let Some(node_opt) = self.nodes.get_mut(index) {
+                if let Some(node) = node_opt {
+                    prev = cur;
+                    match node.key.cmp(&k) {
+                        Ordering::Less => cur = node.right,   // node < key
+                        Ordering::Greater => cur = node.left, // key < node
+                        Ordering::Equal => return Some(std::mem::replace(&mut node.value, v)),
+                    }
+                } else {
+                    panic!("Some index followed by 'pointer' led to a deallocated node in insert(). index: {}", index);
                 }
             } else {
                 // Root is not present; add in new root.
@@ -205,7 +243,7 @@ where
                 // * If the tree is empty, the next node to be added should be at the start of the array.
                 self.root.replace(0);
                 self.nodes
-                    .push(Node::from(0, None, None, None, k, v, Color::Black));
+                    .push(Some(Node::from(0, None, None, None, k, v, Color::Black)));
                 return None;
             }
         }
@@ -221,7 +259,7 @@ where
             Ordering::Equal => unreachable!(),
         }
         let z = Node::from(index, prev, None, None, k, v, Color::Red);
-        self.nodes.push(z);
+        self.nodes.push(Some(z));
         self.insert_fix(index);
 
         None
@@ -294,6 +332,16 @@ where
         self.enforce_root_black();
         Some(())
     }
+    pub fn remove(&mut self, k: K) -> Option<V> 
+    where
+        V: Default,
+    {
+        let node = self.get_and_take_node(&k)?;
+        let old = node.value;
+        let z_idx = node.index;
+        self.delete(z_idx);
+        Some(old)
+    }
     // Replace node u with node v.  v can be nil, u cannot.
     // Note: we don't do any checking for whether or not these indices point to nodes.
     fn transplant(&mut self, u_opt: Option<usize>, v_opt: Option<usize>) {
@@ -322,6 +370,10 @@ where
             }
             None => self.root = v_opt,
         }
+    }
+    fn delete(&mut self, z_idx: usize) -> Option<()> {
+        
+        Some(())
     }
     pub fn show(&self)
     where
@@ -354,7 +406,9 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for n in &self.nodes {
-            write!(f, "{}", n)?;
+            if let Some(n) = n {
+                write!(f, "{}", n)?;
+            }
         }
         Ok(())
     }
