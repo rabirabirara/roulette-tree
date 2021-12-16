@@ -182,15 +182,24 @@ where
                 }
             } // else, the node is deallocated; skip it
         }
-        return None;
+        None
     }
-    // get_mut...
-    // * Takes ownership of a node, deallocating it
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        for k in &mut self.nodes {
+            if let Some(k) = k {
+                if k.key.cmp(key) == Ordering::Equal {
+                    return Some(&mut k.value);
+                }
+            } // else, the node is deallocated; skip it
+        }
+        None
+    }
+    // * Takes ownership of a node, replacing it with None.  Does this deallocate?
+    // See: https://stackoverflow.com/questions/56522510/does-setting-an-option-instance-from-some-to-none-trigger-dropping-of-the-inner
     fn get_and_take_node(&mut self, key: &K) -> Option<Node<K, V>> {
         for k_node in &mut self.nodes {
             if let Some(k) = k_node {
                 if k.key.cmp(key) == Ordering::Equal {
-                    // ! Check if this causes the node to be deallocated.
                     return std::mem::take(k_node);
                 }
             }
