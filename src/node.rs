@@ -6,6 +6,15 @@ pub enum Color {
     Black,
 }
 
+impl fmt::Display for Color {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Color::Red => write!(f, "R"),
+            Color::Black => write!(f, "B"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Node<K, V> {
     pub index: usize,
@@ -23,8 +32,8 @@ impl<K, V> Node<K, V> {
         parent: Option<usize>,
         left: Option<usize>,
         right: Option<usize>,
-        key: K,
-        value: V,
+        k: K,
+        v: V,
         color: Color,
     ) -> Self {
         Node {
@@ -32,8 +41,8 @@ impl<K, V> Node<K, V> {
             parent,
             left,
             right,
-            key,
-            value,
+            key: k,
+            value: v,
             color,
         }
     }
@@ -47,8 +56,10 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "[{:?} -> {} -> ({:?}, {:?})]::{:?} ({} -> {})",
-            self.parent, self.index, self.left, self.right, self.color, self.key, self.value
+            // "[{:?} -> {} -> ({:?}, {:?})]-{:?} ({} -> {})",
+            // self.parent, self.index, self.left, self.right, self.color, self.key, self.value
+            "[{} -> {} : {}.{}]",
+            self.key, self.value, self.index, self.color
         )
     }
 }

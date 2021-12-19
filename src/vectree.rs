@@ -5,6 +5,7 @@ use crate::node::{Color, Node};
 
 // * The implementation of this RB tree does not actually delete nodes.  It instead leaks them.
 // * This tree is best used when you need to insert and update objects, but not remove them - for example, storing a map.
+// * Of course, the implementation reuses unoccupied spaces in the Vec.  And removing from a Vec, properly, doesn't exactly shrink it either.
 
 // Why use a Vec over pointers and heap allocation?  Well, pointers (dynamic object creation) are less performant and heap allocation struggles to exploit the cache.  We might lose the ability to deallocate individual elements, but we gain the ability of a fast linear search (which excels for small trees), instant indexing of the tree, a quick determination of length, etc.
 // Read https://doc.rust-lang.org/std/collections/struct.BTreeMap.html for more information.
@@ -33,15 +34,30 @@ where
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
+    fn clear(&mut self) {
+        self.nodes.clear();
+        self.leaked.clear();
+        self.root = None;
+    }
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
+    fn is_root(&self, node: &Node<K, V>) -> bool {
+        self.root.contains(&node.index)
+    }
+    fn set_root(&mut self, root: Option<usize>) {
+        self.root = root;
+    }
     // Should be a fast way to access a node at some index.
     fn at(&self, idx: usize) -> &Node<K, V> {
-        self.nodes[idx].as_ref().expect(format!("Expected an allocated Some(node) at index {}", idx).as_str())
+        self.nodes[idx]
+            .as_ref()
+            .expect(format!("Expected an allocated Some(node) at index {}", idx).as_str())
     }
     fn at_mut(&mut self, idx: usize) -> &mut Node<K, V> {
-        self.nodes[idx].as_mut().expect(format!("Expected an allocated Some(node) at index {}", idx).as_str())
+        self.nodes[idx]
+            .as_mut()
+            .expect(format!("Expected an allocated Some(node) at index {}", idx).as_str())
     }
     fn try_at(&self, idx: usize) -> Option<&Node<K, V>> {
         self.nodes[idx].as_ref()
@@ -196,11 +212,11 @@ where
     }
     // * Takes ownership of a node, replacing it with None.  Does this deallocate?
     // See: https://stackoverflow.com/questions/56522510/does-setting-an-option-instance-from-some-to-none-trigger-dropping-of-the-inner
-    fn get_and_take_node(&mut self, key: &K) -> Option<Node<K, V>> {
-        for k_node in &mut self.nodes {
+    fn get_node(&self, key: &K) -> Option<&Node<K, V>> {
+        for k_node in &self.nodes {
             if let Some(k) = k_node {
                 if k.key.cmp(key) == Ordering::Equal {
-                    return std::mem::take(k_node);
+                    return Some(k);
                 }
             }
         }
@@ -232,9 +248,22 @@ where
         let mut prev = None;
         let mut cur = self.root;
 
+        // If the tree is empty, the next node to be added should be at the start of the array.
+        // If the tree is empty but has capacity because of deletions and leakage, clear the vec.
+        // ? When to clear the inner Vec?  on the last deletion, or on the next insertion?  It'll clear on drop anyway...
+        if self.is_empty() {
+            self.clear();
+            self.root.replace(0);
+            self.nodes
+                .push(Some(Node::from(0, None, None, None, k, v, Color::Black)));
+            return None;
+        }
+
+        // Else, the tree has some elements.
         while let Some(index) = cur {
-            if let Some(node_opt) = self.nodes.get_mut(index) {
-                if let Some(node) = node_opt {
+            // ! This doesn't use .get(), so bounds-checking has been removed, essentially.  Let it panic.
+            if let Some(node) = self.nodes.get_mut(index) {
+                if let Some(node) = node.as_mut() {
                     prev = cur;
                     match node.key.cmp(&k) {
                         Ordering::Less => cur = node.right,   // node < key
@@ -245,15 +274,11 @@ where
                     panic!("Some index followed by 'pointer' led to a deallocated node in insert(). index: {}", index);
                 }
             } else {
-                // Root is not present; add in new root.
-                if !self.is_empty() {
-                    panic!("could not find node of root index, despite self being occupied.");
-                }
-                // * If the tree is empty, the next node to be added should be at the start of the array.
-                self.root.replace(0);
-                self.nodes
-                    .push(Some(Node::from(0, None, None, None, k, v, Color::Black)));
-                return None;
+                // Index is out of bounds.
+                panic!(
+                    "The tree is nonempty, but an index was out of bounds: {}",
+                    index
+                );
             }
         }
         // reached nil, tree not empty, prev = Some(node) under which to place the new node.
@@ -263,8 +288,12 @@ where
         );
 
         match k.cmp(&leaf.key) {
-            Ordering::Less => { leaf.left.replace(index); },
-            Ordering::Greater => { leaf.right.replace(index); },
+            Ordering::Less => {
+                leaf.left.replace(index);
+            }
+            Ordering::Greater => {
+                leaf.right.replace(index);
+            }
             Ordering::Equal => unreachable!(),
         }
         let z = Node::from(index, prev, None, None, k, v, Color::Red);
@@ -341,21 +370,31 @@ where
         self.enforce_root_black();
         Some(())
     }
-    pub fn remove(&mut self, k: K) -> Option<V> 
-    where
-        V: Default,
-    {
-        let node = self.get_and_take_node(&k)?;
-        let old = node.value;
-        let z_idx = node.index;
-        self.delete(z_idx);
-        Some(old)
+    // Add the index of a node that is leaked.
+    fn mark_leaked(&mut self, idx: usize) -> Option<Node<K, V>> {
+        self.leaked.push(idx);
+        std::mem::take(self.nodes.get_mut(idx)?)
+    }
+    // Went through a lot of changes just to retain the ability to move out and return the removed value!
+    pub fn remove(&mut self, k: K) -> Option<V> {
+        let node_idx = self.get_node(&k)?.index;
+        if let Some(idx) = self.delete(node_idx) {
+            if let Some(old) = self.mark_leaked(idx) {
+                return Some(old.value);
+            } else {
+                println!("leak() could not get_mut() at {}", idx);
+            }
+        } else {
+            println!("delete returned None");
+        }
+        None
     }
     // Replace node u with node v.  v can be nil, u cannot.
     // Note: we don't do any checking for whether or not these indices point to nodes.
-    fn transplant(&mut self, u_opt: Option<usize>, v_opt: Option<usize>) {
-        let u = self.at_opt(u_opt).expect("u cannot be nil in transplant()!");
-        let u_idx = u_opt.expect("u cannot be nil in transplant().");
+    fn transplant(&mut self, u_idx: usize, v_opt: Option<usize>) {
+        let u = self.try_at(u_idx).expect(
+            "Expected u_idx to not point to a deallocated node, but got a None in transplant().",
+        );
         let u_parent = u.parent;
 
         if let Some(v) = self.at_mut_opt(v_opt) {
@@ -377,21 +416,187 @@ where
                     panic!("Parent of u not found in the tree.");
                 }
             }
-            None => self.root = v_opt,
+            None => self.set_root(v_opt),
         }
     }
-    fn delete(&mut self, z_idx: usize) -> Option<()> {
-        
+    // Return the index of the node to be leaked.
+    fn delete(&mut self, z_idx: usize) -> Option<usize> {
+        let x_ptr;
+        // let z = self.at(z);
+        // let z_left = z.right;
+        // * Original color of the deleted node.  If z has two children, then the actual deleted node is y, the minimum of the subtree at z.  y takes z's place and color, but we lose y's original color; hence.
+        let z = self.at(z_idx);
+        let z_left = z.left;
+        let z_right = z.right;
+        let z_color = z.color;
+        let mut original_color = z_color;
+
+        if z_left.is_none() {
+            // case 1: z has no left child, so replace z with right child (and tree)
+            x_ptr = z_right;
+            self.transplant(z_idx, z_right);
+        } else if z_right.is_none() {
+            // case 2: z has no right child (but has a left child), so replace z with left child (and tree)
+            x_ptr = z_left;
+            self.transplant(z_idx, z_left);
+        } else {
+            // z has two children.  there are now new cases.
+            let y_idx = self.minimum(z_right)?; // guaranteed to be some by if branch
+            let y = self.at(y_idx);
+            let y_right = y.right;
+            original_color = y.color;
+            x_ptr = y.right;
+            if y.parent.contains(&z_idx) {
+                // case 3: z's right child has no left subtree. then replace z with right child and call it a day.
+                // also: x's parent is ALREADY y. x is the right child of y, and y is the right child of z.
+            } else {
+                // TODO: verify this logic is correct.  Maybe think about using split_at_mut?  After all parent and child cannot be same node.
+                // case 4: z's right child has a left subtree. y = minimum of z.right subtree.
+                // Delete y and replace it with it's right child.
+                self.transplant(y_idx, y_right);
+                let y = self.at_mut(y_idx);
+                y.right = z_right;
+                let y_right = self.at_mut(z_right?);
+                y_right.parent.replace(y_idx);
+            }
+            self.transplant(z_idx, Some(y_idx));
+            let y = self.at_mut(y_idx);
+            y.left = z_left;
+            y.color = z_color;
+            let y_left = self.at_mut(z_left?);
+            y_left.parent.replace(y_idx);
+        }
+
+        if original_color == Color::Black {
+            self.delete_fix(x_ptr);
+        }
+
+        println!("{:?}", self.leaked);
+        Some(z_idx)
+    }
+    fn delete_fix(&mut self, replaced_opt: Option<usize>) -> Option<()> {
+        // we could have transplanted a null node, so leave that option open. (happens only after deletes, because usually leaves aren't black.)
+        // in that case, a leaf node was deleted, and replaced with null, which is black.  so no changes need to be made.
+        let mut x_opt = replaced_opt;
+
+        // x is only assigned to x.p in this loop, and since x is never root, x.p must exist.
+        // if x is null, then replaced_opt was a leaf node (z had no children).
+        while let Some(x) = self.at_opt(x_opt) {
+            if self.is_root(x) || x.color == Color::Red {
+                // if x is red, color it black (outside the loop).
+                break;
+            }
+
+            // ! Apparently w's children should exist? w should exist by property 5.
+            let x_parent_idx = x.parent?;
+
+            if x_opt == self.at(x_parent_idx).left {
+                let mut w_idx = self.at(x_parent_idx).right?;
+    
+                // Case 1: x's sibling w is red
+                if self.at(w_idx).color == Color::Red {
+                    self.at_mut(w_idx).color = Color::Black;
+                    self.at_mut(x_parent_idx).color = Color::Red;
+                    self.left_rotate(x_parent_idx);
+                    w_idx = self.at(x_parent_idx).right?;
+                }
+    
+                let w = self.at(w_idx);
+                let w_left = w.left;
+                let w_right = w.right;
+                let w_left_black = self.has_color(w_left, Color::Black);
+                let w_right_black = self.has_color(w_right, Color::Black);
+    
+                if w_left_black && w_right_black {
+                    // Case 2: w has two black children
+                    self.at_mut(w_idx).color = Color::Black;
+                    x_opt.replace(x_parent_idx);
+                } else {
+                    // case 3
+                    if w_right_black {
+                        self.at_mut(w_left?).color = Color::Black;
+                        self.at_mut(w_idx).color = Color::Red;
+                        self.right_rotate(w_idx);   // mutates x.parent
+                        w_idx = self.at(x_parent_idx).right?;   // * we do a lot of reassigning...
+                    }
+                    // case 4:
+                    self.at_mut(w_idx).color = self.at(x_parent_idx).color;
+                    self.at_mut(x_parent_idx).color = Color::Black;
+                    self.at_mut(w_right?).color = Color::Black;
+                    self.left_rotate(x_parent_idx);
+                    break;
+                }
+            } else if x_opt == self.at(x_parent_idx).right {
+                let mut w_idx = self.at(x_parent_idx).left?;
+    
+                // Case 1: x's sibling w is red
+                if self.at(w_idx).color == Color::Red {
+                    self.at_mut(w_idx).color = Color::Black;
+                    self.at_mut(x_parent_idx).color = Color::Red;
+                    self.right_rotate(x_parent_idx);
+                    w_idx = self.at(x_parent_idx).left?;
+                }
+    
+                let w = self.at(w_idx);
+                let w_left = w.left;
+                let w_right = w.right;
+                let w_left_black = self.has_color(w_left, Color::Black);
+                let w_right_black = self.has_color(w_right, Color::Black);
+    
+                if w_left_black && w_right_black {
+                    // Case 2: w has two black children
+                    self.at_mut(w_idx).color = Color::Black;
+                    x_opt.replace(x_parent_idx);
+                } else {
+                    // case 3
+                    if w_left_black {
+                        self.at_mut(w_right?).color = Color::Black;
+                        self.at_mut(w_idx).color = Color::Red;
+                        self.left_rotate(w_idx);   // mutates x.parent
+                        w_idx = self.at(x_parent_idx).left?;   // * we do a lot of reassigning...
+                    }
+                    // case 4:
+                    self.at_mut(w_idx).color = self.at(x_parent_idx).color;
+                    self.at_mut(x_parent_idx).color = Color::Black;
+                    self.at_mut(w_left?).color = Color::Black;
+                    self.right_rotate(x_parent_idx);
+                    break;
+                }
+            }
+        }
+
+        // Set x to black.  It may seem like you only leave the loop if x is the root or is already black, but that's only in pseudocode.  You have a lot of breaks in the loop, remember?
+        // Also, x_opt is occasionally None, because a z with two children, the one on the right y, might have no child x, and so x is None.
+        if let Some(x) = self.at_mut_opt(x_opt) {
+            x.color = Color::Black;
+        }
         Some(())
+    }
+    fn has_color(&self, idx_opt: Option<usize>, color: Color) -> bool {
+        // If the idx_opt is null, then its color is actually black.
+        match idx_opt {
+            Some(idx) => {
+                match self.try_at(idx) {
+                    Some(n) => n.color == color,
+                    None => false,
+                }
+            },
+            None => {
+                match color {
+                    Color::Red => false,
+                    Color::Black => true,
+                }
+            },
+        }
     }
     pub fn show(&self)
     where
         K: Display,
         V: Display,
     {
-        self.display(self.root, "");
+        self.display(self.root, "", 0);
     }
-    pub fn display(&self, root_opt: Option<usize>, tab: &str)
+    pub fn display(&self, root_opt: Option<usize>, tab: &str, depth: usize)
     where
         K: Display,
         V: Display,
@@ -399,11 +604,11 @@ where
         match self.at_opt(root_opt) {
             Some(node) => {
                 let tabbed = format!("{}    ", tab);
-                self.display(node.left, &tabbed);
-                println!("{}{}", tab, node);
-                self.display(node.right, &tabbed);
+                self.display(node.left, &tabbed, depth + 1);
+                println!("{}{}{}", tab, depth, node);
+                self.display(node.right, &tabbed, depth + 1);
             }
-            None => return,
+            None => println!("{}None", tab),
         }
     }
 }
