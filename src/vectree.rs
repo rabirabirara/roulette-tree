@@ -10,6 +10,8 @@ use crate::node::{Color, Node};
 // Why use a Vec over pointers and heap allocation?  Well, pointers (dynamic object creation) are less performant and heap allocation struggles to exploit the cache.  We might lose the ability to deallocate individual elements, but we gain the ability of a fast linear search (which excels for small trees), instant indexing of the tree, a quick determination of length, etc.
 // Read https://doc.rust-lang.org/std/collections/struct.BTreeMap.html for more information.
 
+const INITIAL_ROOT: usize = 0;
+
 use std::fmt::Debug;
 pub struct VecTree<K, V> {
     // ? A node can be allocated or "leaked".
@@ -17,6 +19,7 @@ pub struct VecTree<K, V> {
     // Store the index of leaked nodes.
     leaked: Vec<usize>,
     root: Option<usize>,
+    len: usize,
 }
 
 impl<K, V> VecTree<K, V>
@@ -29,17 +32,24 @@ where
             nodes: Vec::new(),
             leaked: Vec::new(),
             root: None,
+            len: 0,
         }
     }
     pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
+        self.len == 0
     }
     fn clear(&mut self) {
         self.nodes.clear();
         self.leaked.clear();
         self.root = None;
+        self.len = 0;
     }
+    // Returns number of allocated nodes.
     pub fn len(&self) -> usize {
+        self.len
+    }
+    // Returns number of nodes, allocated + leaked, in the Vec.
+    pub fn capacity(&self) -> usize {
         self.nodes.len()
     }
     fn is_root(&self, node: &Node<K, V>) -> bool {
@@ -242,6 +252,16 @@ where
         }
         return None;
     }
+    fn add(&mut self, n: Node<K, V>, i: usize, push: bool) {
+        self.len += 1;
+
+        if push {
+            self.nodes.push(Some(n));
+        } else {
+            // at nodes[i] is a deallocated None node; replace it with a Some(n)
+            self.nodes[i].replace(n);
+        }
+    }
     // lookup_mut...
     // Note: maps use "mem::replace" to replace elements.
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
@@ -253,9 +273,8 @@ where
         // ? When to clear the inner Vec?  on the last deletion, or on the next insertion?  It'll clear on drop anyway...
         if self.is_empty() {
             self.clear();
-            self.root.replace(0);
-            self.nodes
-                .push(Some(Node::from(0, None, None, None, k, v, Color::Black)));
+            self.root.replace(INITIAL_ROOT);
+            self.add(Node::from(INITIAL_ROOT, None, None, None, k, v, Color::Black), 0, true);
             return None;
         }
 
@@ -282,7 +301,20 @@ where
             }
         }
         // reached nil, tree not empty, prev = Some(node) under which to place the new node.
-        let index = self.nodes.len();
+
+        // If there's leaked nodes, place this node in a leaked index. Else place this node at the end.
+        // Think of leakage as a Dyck path, where removals raise the path and insertions (after removals) bring it down.  The height of the path is the quantity of leakage.
+        // ? Which order to pop from?  Which is more common - removing recently inserted nodes or removing old nodes?
+        // ? Does it matter if I reuse nodes by taking from front or from back?
+        let push_this;
+        let index = if let Some(top) = self.leaked.pop() {
+            push_this = false;
+            top
+        } else {
+            push_this = true;
+            self.nodes.len()
+        };
+        
         let leaf = self.at_mut(
             prev.expect("ERR: prev should contain a Some(index) that points to an existing node."),
         );
@@ -296,8 +328,7 @@ where
             }
             Ordering::Equal => unreachable!(),
         }
-        let z = Node::from(index, prev, None, None, k, v, Color::Red);
-        self.nodes.push(Some(z));
+        self.add(Node::from(index, prev, None, None, k, v, Color::Red), index, push_this);
         self.insert_fix(index);
 
         None
@@ -378,16 +409,15 @@ where
     // Went through a lot of changes just to retain the ability to move out and return the removed value!
     pub fn remove(&mut self, k: K) -> Option<V> {
         let node_idx = self.get_node(&k)?.index;
-        if let Some(idx) = self.delete(node_idx) {
-            if let Some(old) = self.mark_leaked(idx) {
-                return Some(old.value);
-            } else {
-                println!("leak() could not get_mut() at {}", idx);
-            }
-        } else {
-            println!("delete returned None");
-        }
-        None
+        self.len -= 1; // if the node is in the tree it will be deleted or we panic.  if not in the tree above will propagate none
+        let idx = self
+            .delete(node_idx)
+            .expect("delete returned None, when there is no situation in which it should not.");
+        Some(
+            self.mark_leaked(idx)
+                .expect(format!("leak() could not get_mut() at {}", idx).as_ref())
+                .value,
+        )
     }
     // Replace node u with node v.  v can be nil, u cannot.
     // Note: we don't do any checking for whether or not these indices point to nodes.
@@ -471,7 +501,6 @@ where
             self.delete_fix(x_ptr);
         }
 
-        println!("{:?}", self.leaked);
         Some(z_idx)
     }
     fn delete_fix(&mut self, replaced_opt: Option<usize>) -> Option<()> {
@@ -492,7 +521,7 @@ where
 
             if x_opt == self.at(x_parent_idx).left {
                 let mut w_idx = self.at(x_parent_idx).right?;
-    
+
                 // Case 1: x's sibling w is red
                 if self.at(w_idx).color == Color::Red {
                     self.at_mut(w_idx).color = Color::Black;
@@ -500,13 +529,13 @@ where
                     self.left_rotate(x_parent_idx);
                     w_idx = self.at(x_parent_idx).right?;
                 }
-    
+
                 let w = self.at(w_idx);
                 let w_left = w.left;
                 let w_right = w.right;
                 let w_left_black = self.has_color(w_left, Color::Black);
                 let w_right_black = self.has_color(w_right, Color::Black);
-    
+
                 if w_left_black && w_right_black {
                     // Case 2: w has two black children
                     self.at_mut(w_idx).color = Color::Black;
@@ -516,8 +545,8 @@ where
                     if w_right_black {
                         self.at_mut(w_left?).color = Color::Black;
                         self.at_mut(w_idx).color = Color::Red;
-                        self.right_rotate(w_idx);   // mutates x.parent
-                        w_idx = self.at(x_parent_idx).right?;   // * we do a lot of reassigning...
+                        self.right_rotate(w_idx); // mutates x.parent
+                        w_idx = self.at(x_parent_idx).right?; // * we do a lot of reassigning...
                     }
                     // case 4:
                     self.at_mut(w_idx).color = self.at(x_parent_idx).color;
@@ -528,7 +557,7 @@ where
                 }
             } else if x_opt == self.at(x_parent_idx).right {
                 let mut w_idx = self.at(x_parent_idx).left?;
-    
+
                 // Case 1: x's sibling w is red
                 if self.at(w_idx).color == Color::Red {
                     self.at_mut(w_idx).color = Color::Black;
@@ -536,13 +565,13 @@ where
                     self.right_rotate(x_parent_idx);
                     w_idx = self.at(x_parent_idx).left?;
                 }
-    
+
                 let w = self.at(w_idx);
                 let w_left = w.left;
                 let w_right = w.right;
                 let w_left_black = self.has_color(w_left, Color::Black);
                 let w_right_black = self.has_color(w_right, Color::Black);
-    
+
                 if w_left_black && w_right_black {
                     // Case 2: w has two black children
                     self.at_mut(w_idx).color = Color::Black;
@@ -552,8 +581,8 @@ where
                     if w_left_black {
                         self.at_mut(w_right?).color = Color::Black;
                         self.at_mut(w_idx).color = Color::Red;
-                        self.left_rotate(w_idx);   // mutates x.parent
-                        w_idx = self.at(x_parent_idx).left?;   // * we do a lot of reassigning...
+                        self.left_rotate(w_idx); // mutates x.parent
+                        w_idx = self.at(x_parent_idx).left?; // * we do a lot of reassigning...
                     }
                     // case 4:
                     self.at_mut(w_idx).color = self.at(x_parent_idx).color;
@@ -575,17 +604,13 @@ where
     fn has_color(&self, idx_opt: Option<usize>, color: Color) -> bool {
         // If the idx_opt is null, then its color is actually black.
         match idx_opt {
-            Some(idx) => {
-                match self.try_at(idx) {
-                    Some(n) => n.color == color,
-                    None => false,
-                }
+            Some(idx) => match self.try_at(idx) {
+                Some(n) => n.color == color,
+                None => false,
             },
-            None => {
-                match color {
-                    Color::Red => false,
-                    Color::Black => true,
-                }
+            None => match color {
+                Color::Red => false,
+                Color::Black => true,
             },
         }
     }
