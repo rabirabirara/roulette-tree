@@ -1,6 +1,7 @@
-use std::fmt;
+use std::fmt::{Display, Formatter, self};
+use std::hash::{Hash, Hasher};
 
-#[derive(Eq, PartialEq, Debug, Clone, Copy)]
+#[derive(Eq, PartialEq, Debug, Clone, Copy, Hash)]
 pub enum Color {
     Red,
     Black,
@@ -48,12 +49,12 @@ impl<K, V> Node<K, V> {
     }
 }
 
-impl<K, V> fmt::Display for Node<K, V>
+impl<K, V> Display for Node<K, V>
 where
-    K: fmt::Display,
-    V: fmt::Display,
+    K: Display,
+    V: Display,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             // "[{:?} -> {} -> ({:?}, {:?})]-{:?} ({} -> {})",
@@ -61,5 +62,22 @@ where
             "[{} -> {} : {}.{}]",
             self.key, self.value, self.index, self.color
         )
+    }
+}
+
+impl<K, V> Hash for Node<K, V>
+where
+    K: Hash,
+    V: Hash,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+        self.parent.map(|inner| inner.hash(state));
+        self.left.map(|inner| inner.hash(state));
+        self.right.map(|inner| inner.hash(state));
+        self.key.hash(state);
+        self.value.hash(state);
+        self.color.hash(state);
+        state.finish();
     }
 }

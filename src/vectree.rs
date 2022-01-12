@@ -1,5 +1,6 @@
 use std::cmp::{Ord, Ordering};
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 
 use crate::node::{Color, Node};
 
@@ -200,6 +201,7 @@ where
     // Linear is faster in practice thanks to cache locality.
     // BST is faster asymptotically.
     // We implement get() and lookup() to represent both.
+    // TODO Maybe prefer linear search when inner Vec has len < 40, and recursive search else.
     pub fn get(&self, key: &K) -> Option<&V> {
         for k in &self.nodes {
             if let Some(k) = k {
@@ -274,7 +276,11 @@ where
         if self.is_empty() {
             self.clear();
             self.root.replace(INITIAL_ROOT);
-            self.add(Node::from(INITIAL_ROOT, None, None, None, k, v, Color::Black), 0, true);
+            self.add(
+                Node::from(INITIAL_ROOT, None, None, None, k, v, Color::Black),
+                0,
+                true,
+            );
             return None;
         }
 
@@ -314,7 +320,7 @@ where
             push_this = true;
             self.nodes.len()
         };
-        
+
         let leaf = self.at_mut(
             prev.expect("ERR: prev should contain a Some(index) that points to an existing node."),
         );
@@ -328,7 +334,11 @@ where
             }
             Ordering::Equal => unreachable!(),
         }
-        self.add(Node::from(index, prev, None, None, k, v, Color::Red), index, push_this);
+        self.add(
+            Node::from(index, prev, None, None, k, v, Color::Red),
+            index,
+            push_this,
+        );
         self.insert_fix(index);
 
         None
@@ -650,5 +660,25 @@ where
             }
         }
         Ok(())
+    }
+}
+
+impl<K, V> Hash for VecTree<K, V>
+where
+    K: Hash,
+    V: Hash,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // hash only allocated nodes, in their order
+        let just_nodes = self
+            .nodes
+            .iter()
+            .filter_map(|x| x.as_ref())
+            .collect::<Vec<&Node<K, V>>>();
+        just_nodes.hash(state);
+        self.leaked.hash(state);
+        self.root.map(|x| x.hash(state));
+        self.len.hash(state);
+        state.finish();
     }
 }
