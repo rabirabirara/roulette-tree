@@ -317,6 +317,7 @@ where
             push_this = false;
             top
         } else {
+            // index is not used in this case
             push_this = true;
             self.nodes.len()
         };
@@ -422,7 +423,7 @@ where
         self.len -= 1; // if the node is in the tree it will be deleted or we panic.  if not in the tree above will propagate none
         let idx = self
             .delete(node_idx)
-            .expect("delete returned None, when there is no situation in which it should not.");
+            .expect("delete returned None, when there is no situation in which it should.");
         Some(
             self.mark_leaked(idx)
                 .expect(format!("leak() could not get_mut() at {}", idx).as_ref())
@@ -631,7 +632,7 @@ where
     {
         self.display(self.root, "", 0);
     }
-    pub fn display(&self, root_opt: Option<usize>, tab: &str, depth: usize)
+    fn display(&self, root_opt: Option<usize>, tab: &str, depth: usize)
     where
         K: Display,
         V: Display,
