@@ -26,7 +26,6 @@ Why use a Vec over pointers and heap allocation?  Well, pointers (dynamic object
 No; newer languages tend to use B-Trees.  Java and C++ use red-black trees in their implementations of set and map, but Rust uses a B-Tree.
 Read https://doc.rust-lang.org/std/collections/struct.BTreeMap.html for more information.  
 
-Note that while similar ideas apply (try to exploit the cache and such), a B-tree is considerably different in representation than a red-black tree, with a red-black tree being a genuine binary search tree (albeit balanced), and the B-tree being superior in almost every way.  
-Nonetheless, one can demonstrate that red-black trees are a subset of B-trees by moving red nodes up to join their parents in a 2/3-node.
+A B-tree is considerably different in representation than a red-black tree, with a red-black tree being a genuine binary search tree (albeit balanced), and the B-tree being superior in many ways.  Nonetheless, one can demonstrate that red-black trees are a subset of B-trees by moving red nodes up to join their parents in a 2/3-node.
 
 For more information about B-trees and Rust's implementation of them in the standard library, see Alexis' own blog: https://cglab.ca/~abeinges/blah/rust-btree-case/
