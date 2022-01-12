@@ -19,7 +19,9 @@ However, since `Vec` and most other vector implementations do not lose storage c
 
 Only when the tree is emptied does it fully deallocate the inner Vec.
 
-Why use a Vec over pointers and heap allocation?  Well, pointers (dynamic object creation) are less performant and heap allocation struggles to exploit the cache.  We might lose the ability to deallocate individual elements, but we gain the ability of a fast linear search (which excels for small trees with little deletions), instant indexing of the tree, reuse of the `Vec` API if we need etc.
+Why use a Vec over pointers and heap allocation?  Well, pointers (dynamic object creation) are less performant and the fragmented heap allocation you get with pointers to nowhere struggles to exploit the cache.  We might lose the ability to deallocate individual elements, but we gain the ability of a fast linear search (which excels for small trees with little deletions), instant indexing of the tree, reuse of the `Vec` API if we need etc.
+
+The most important motivation, however, is the fact that Rust does not appreciate circular reference - and so if we used pointers, we would never be able to refer to parents.  Rust's disdain of circular reference holds similarity to functional immutable data structures, where you can typically only traverse one way.  This way of programming encourages memory safety at the cost of ease of use - of course, it's not like using a `Vec` is hard.
 
 ### Does Rust use a RB Tree?
 
