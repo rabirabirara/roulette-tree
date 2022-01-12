@@ -1,6 +1,6 @@
 # roulette-tree
 
-A red-black tree.
+A red-black tree.  For didactic purposes.
 
 ## VecTree
 
